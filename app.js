@@ -3,6 +3,8 @@ require( 'dotenv' ).config();
 var express = require( 'express' );
 var request = require( 'request' );
 var moment = require( 'moment' );
+var winston = require( 'winston' )
+winston.add( winston.transports.File, { filename: 'server-log.log' } );
 
 var app = express();
 
@@ -21,7 +23,7 @@ app.listen( 8888, function() {
 
 function beginLoop() {
   setTimeout( function() {
-    console.log( "Doing a loop at " + moment() );
+    winston.info('Doing a loop at ' + moment() )
 
     checkAndExecuteOrder();
     beginLoop();
@@ -30,7 +32,7 @@ function beginLoop() {
 }
 
 function checkAndExecuteOrder() {
-  if ( moment.get('hour') === '17' ) {
+  if ( moment().get('hour') === 17 ) {
     switch( moment().day() ) {
       case 1: // Monday
         target_restaurant = 'Sababa';
@@ -47,6 +49,7 @@ function checkAndExecuteOrder() {
       default:
         sleepUntilTomorrow();
     }
+
     submitLogin();
     getMenu();
     reserveMeal();
@@ -55,11 +58,16 @@ function checkAndExecuteOrder() {
 
 function sleepUntilTomorrow() {
   setTimeout( function() {
-    console.log( "Sleeping for 23 hours" );
+    winston.info( "Sleeping for 23 hours" );
   }, 3600000 )
 }
 
 function submitLogin() {
+  var body = {
+    "username": process.env.USERNAME,
+    "password": process.env.PASSWORD
+  }
+
   var options = {
     url: "https://secure." + process.env.SERVICE + ".com/1/login",
     headers: {
@@ -71,23 +79,29 @@ function submitLogin() {
       "Referer": "https://secure." + process.env.SERVICE + ".com/login",
       "Origin": "https://secure." + process.env.SERVICE + ".com"
     },
-    body: {
-      username: process.env.USERNAME,
-      password: process.env.PASSWORD
-    }
+    body: JSON.stringify(body)
   };
 
-  request( options, function( error, response, body ) {
-    if ( !error && response.statusCode === 200 ) {
-      var data = JSON.parse( body );
+  request.post( options, function( error, response, body ) {
+    checkAndHandleError( error );
 
-      sesson_token = info.sessionToken.split( ':' )[1];
+    if ( !error && response['statusCode'] === 200 ) {
+      var data = JSON.parse( body );
+      winston.info( 'Here is the login response: ' + data );
+
+      session_token = data['sessionToken'].split( ':' )[1];
+
+      winston.info('Got this token: ' + session_token )
       return session_token;
     }
   } );
 }
 
 function getMenu() {
+  var body = {
+    "cityId": "00000000-1000-4000-9091-919aa43e4747"
+  }
+
   var options = {
     url: "https://secure." + process.env.SERVICE + ".com/1/functions/getByCity",
     headers: {
@@ -99,20 +113,28 @@ function getMenu() {
       "Referer": "https://secure." + process.env.SERVICE + ".com/login",
       "Origin": "https://secure." + process.env.SERVICE + ".com"
     },
-    body: {
-      cityId: "00000000-1000-4000-9091-919aa43e4747"
-    }
+    body: JSON.stringify(body)
   };
 
-  request( options, function( error, response, body ) {
-    if ( !error && response.statusCode === 200 ) {
+  request.post( options, function( error, response, body ) {
+    checkAndHandleError( error );
+
+    if ( !error && response['statusCode'] === 200 ) {
       var data = JSON.parse( body );
+      winston.info( 'Here is the menu we got: ' + data )
       target_schedule_id = getScheduleId( data );
     }
   } );
 }
 
 function reserveMeal() {
+  var body = {
+    "pickup_time": "12:45-1:00pm",
+    "quantity": 1,
+    "schedule_id": target_schedule_id,
+    "source": "web"
+  }
+
   var options = {
     url: "https://secure." + process.env.SERVICE + ".com/api/v2/reservations",
     headers: {
@@ -125,26 +147,34 @@ function reserveMeal() {
       "Origin": "https://secure." + process.env.SERVICE + ".com",
       "Cookie": "_mealpal_session=" + session_token + "; isLoggedIn=true;"
     },
-    body: {
-      pickup_time: "12:45-1:00pm",
-      quantity: 1,
-      schedule_id: target_schedule_id,
-      source: "web"
-    }
+    body: JSON.stringify(body)
   }
 
-  request( options, function( error, response, body ) {
-    if ( !error && response.statusCode === 200 ) {
+  request.post( options, function( error, response, body ) {
+    checkAndHandleError( error );
+
+    if ( !error && response['statusCode'] === 200 ) {
       var data = JSON.parse( body );
-      console.log( data );
+      winston.info('Response from reserving meal:');
+      winston.info( data );
+
+      sleepUntilTomorrow();
     }
   } );
 }
 
 function getScheduleId( menu_list ) {
   for ( var i = 0; i < menu_list.length; i++ ) {
-    if ( menu_list[i].restaurant.name === target_restaurant ) {
-      return menu_list[i].objectId;
+    if ( menu_list[i]['restaurant']['name'] === target_restaurant ) {
+      return menu_list[i]['objectId'];
     }
+  }
+}
+
+function checkAndHandleError( error ) {
+  if ( error ) {
+    winston.info( '!-!-!-!-! AN ERROR HAS OCCURRED !-!-!-!-!' );
+    winston.info( error );
+    winston.info( '^-^-^-^-^ CHECK OUT THAT ERROR ^-^-^-^-^-^' )
   }
 }
